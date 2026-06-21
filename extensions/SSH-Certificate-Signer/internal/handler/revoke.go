@@ -16,13 +16,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
-	"github.com/apache/airavata-custos/signer/internal/audit"
 	"github.com/apache/airavata-custos/signer/internal/httputil"
 	"github.com/apache/airavata-custos/signer/internal/metrics"
+	"github.com/apache/airavata-custos/signer/internal/store"
 )
 
 type RevokeRequest struct {
@@ -33,20 +36,36 @@ type RevokeRequest struct {
 }
 
 type RevokeResponse struct {
-	Success      bool   `json:"success"`
-	Message      string `json:"message"`
-	RevokedCount int    `json:"revoked_count"`
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	RevokedCount   int    `json:"revoked_count"`
+	SerialNumber   int64  `json:"serial_number"`
+	Revoked        bool   `json:"revoked"`
+	RevokedAt      int64  `json:"revoked_at"`
+	Reason         string `json:"reason"`
+	AlreadyRevoked bool   `json:"already_revoked,omitempty"`
+}
+
+type revocationStore interface {
+	RevokeCertificateBySerial(
+		ctx context.Context,
+		tenantID string,
+		clientID string,
+		serialNumber int64,
+		reason string,
+		revokedBy string,
+	) (*store.RevokedCertificate, error)
 }
 
 type RevokeHandler struct {
-	auditLogger *audit.Logger
-	logger      *slog.Logger
+	store  revocationStore
+	logger *slog.Logger
 }
 
-func NewRevokeHandler(auditLogger *audit.Logger, logger *slog.Logger) *RevokeHandler {
+func NewRevokeHandler(store revocationStore, logger *slog.Logger) *RevokeHandler {
 	return &RevokeHandler{
-		auditLogger: auditLogger,
-		logger:      logger,
+		store:  store,
+		logger: logger,
 	}
 }
 
@@ -67,41 +86,58 @@ func (h *RevokeHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SerialNumber == nil && req.KeyID == nil && req.CAFingerprint == nil {
+	if req.SerialNumber == nil || *req.SerialNumber <= 0 {
 		metrics.RevokeRequestsTotal.WithLabelValues(tenantID, "error").Inc()
-		writeError(w, http.StatusBadRequest, "invalid_request", "At least one of serial_number, key_id, or ca_fingerprint is required")
+		writeError(w, http.StatusBadRequest, "invalid_request", "Missing or invalid required field: serial_number")
 		return
 	}
 
-	if req.Reason == "" {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
 		metrics.RevokeRequestsTotal.WithLabelValues(tenantID, "error").Inc()
 		writeError(w, http.StatusBadRequest, "invalid_request", "Missing required field: reason")
 		return
 	}
 
-	entry := &audit.RevocationEntry{
-		TenantID:      tenantID,
-		ClientID:      clientID,
-		SerialNumber:  req.SerialNumber,
-		KeyID:         req.KeyID,
-		CAFingerprint: req.CAFingerprint,
-		Reason:        req.Reason,
-		RevokedBy:     tenantID + ":" + clientID,
-	}
+	revokedBy := tenantID + ":" + clientID
 
-	if err := h.auditLogger.LogRevocation(r.Context(), entry); err != nil {
+	revokedCert, err := h.store.RevokeCertificateBySerial(
+		r.Context(),
+		tenantID,
+		clientID,
+		*req.SerialNumber,
+		reason,
+		revokedBy,
+	)
+	if err != nil {
 		metrics.RevokeRequestsTotal.WithLabelValues(tenantID, "error").Inc()
-		h.logger.Error("failed to record revocation", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to record revocation")
+
+		if errors.Is(err, store.ErrCertificateNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "Certificate not found")
+			return
+		}
+
+		h.logger.Error("failed to revoke certificate", "error", err, "serial_number", *req.SerialNumber)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to revoke certificate")
 		return
 	}
 
 	metrics.RevokeRequestsTotal.WithLabelValues(tenantID, "success").Inc()
 
+	message := "Certificate revoked successfully"
+	if revokedCert.AlreadyRevoked {
+		message = "Certificate was already revoked"
+	}
+
 	resp := RevokeResponse{
-		Success:      true,
-		Message:      "Certificate(s) revoked successfully",
-		RevokedCount: 1,
+		Success:        true,
+		Message:        message,
+		RevokedCount:   1,
+		SerialNumber:   revokedCert.SerialNumber,
+		Revoked:        true,
+		RevokedAt:      revokedCert.RevokedAt.Unix(),
+		Reason:         revokedCert.Reason,
+		AlreadyRevoked: revokedCert.AlreadyRevoked,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

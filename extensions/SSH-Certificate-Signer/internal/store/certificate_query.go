@@ -83,7 +83,13 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 			r.revoked_at,
 			COALESCE(r.reason, '') AS revocation_reason
 		 FROM certificate_issuance_logs c
-		 LEFT JOIN revocation_events r ON r.serial_number = c.serial_number
+		 LEFT JOIN revocation_events r ON r.id = (
+			SELECT r2.id
+				FROM revocation_events r2
+			WHERE r2.serial_number = c.serial_number
+			ORDER BY r2.revoked_at DESC, r2.id DESC
+			LIMIT 1
+			)
 		 WHERE c.user_email = ?
 		 ORDER BY c.issued_at DESC
 		 LIMIT ? OFFSET ?`,
@@ -149,7 +155,13 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 			r.revoked_at,
 			COALESCE(r.reason, '') AS revocation_reason
 		 FROM certificate_issuance_logs c
-		 LEFT JOIN revocation_events r ON r.serial_number = c.serial_number
+		 LEFT JOIN revocation_events r ON r.id = (
+			SELECT r2.id
+				FROM revocation_events r2
+			WHERE r2.serial_number = c.serial_number
+			ORDER BY r2.revoked_at DESC, r2.id DESC
+			LIMIT 1
+			)
 		 WHERE c.serial_number = ?`,
 		serial,
 	).Scan(
