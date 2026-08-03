@@ -26,7 +26,12 @@ type Context = { params: Promise<{ path: string[] }> };
 
 async function proxy(request: NextRequest, ctx: Context) {
   const { path } = await ctx.params;
-  const upstreamUrl = new URL(`/${path.join("/")}`, serverEnv.CUSTOS_CORE_API_BASE_URL);
+  const isSigner = path[0] === "signer";
+  const upstreamBase = isSigner
+    ? serverEnv.CUSTOS_SIGNER_API_BASE_URL
+    : serverEnv.CUSTOS_CORE_API_BASE_URL;
+  const upstreamPath = isSigner ? `/api/v1/${path.slice(1).join("/")}` : `/${path.join("/")}`;
+  const upstreamUrl = new URL(upstreamPath, upstreamBase);
   upstreamUrl.search = request.nextUrl.search;
 
   const session = await getPortalSession();

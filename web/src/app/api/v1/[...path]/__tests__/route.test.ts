@@ -23,6 +23,7 @@ import { responseBodyForStatus } from "../proxy-response";
 vi.mock("@/lib/env", () => ({
   serverEnv: {
     CUSTOS_CORE_API_BASE_URL: "https://core.example.org",
+    CUSTOS_SIGNER_API_BASE_URL: "https://signer.example.org",
   },
 }));
 
@@ -31,7 +32,7 @@ vi.mock("@/shared/auth/session", () => ({
   pickBackendBearer: vi.fn(() => "access-token-abc"),
 }));
 
-import { POST } from "../route";
+import { GET, POST } from "../route";
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -53,6 +54,25 @@ describe("responseBodyForStatus", () => {
 });
 
 describe("api v1 proxy route", () => {
+  it("routes the signer namespace to the signer API without changing Core routing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ certificates: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const response = await GET(
+      new NextRequest("http://localhost:3000/api/v1/signer/admin/certificates?limit=20"),
+      { params: Promise.resolve({ path: ["signer", "admin", "certificates"] }) },
+    );
+
+    expect(response.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe("https://signer.example.org/api/v1/admin/certificates?limit=20");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-abc");
+  });
+
   it("proxies no-content backend responses without constructing a response body", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
