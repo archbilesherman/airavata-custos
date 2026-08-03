@@ -17,29 +17,35 @@
 
 "use client";
 
+import { useAbility } from "@/shared/casl/AbilityProvider";
 import { Button } from "@/shared/ui/button";
-import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
-import { useState } from "react";
-import { AuthErrorAlert } from "./AuthErrorAlert";
+import { ErrorState } from "@/shared/ui/ErrorState";
+import { UsersNav } from "../UsersNav";
+import { RoleFormDialog } from "./RoleFormDialog";
+import { RolesGrid } from "./RolesGrid";
 
-export function SignInForm() {
-  const params = useSearchParams();
-  const callbackUrl = params.get("callbackUrl") ?? "/";
-  const externalError = params.get("error");
-  const [submitting, setSubmitting] = useState(false);
+export function RoleManagementView() {
+  const ability = useAbility();
+  const canManageRoles = ability.can("manage", "Role");
 
-  const submitOidc = async () => {
-    setSubmitting(true);
-    await signIn("oidc", { callbackUrl });
-  };
+  if (!canManageRoles) {
+    return (
+      <div className="space-y-6">
+        <UsersNav />
+        <ErrorState
+          heading="Not permitted"
+          message="You do not have permission to manage roles."
+        />
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-4">
-      <AuthErrorAlert code={externalError} />
-      <Button onClick={submitOidc} disabled={submitting} className="w-full">
-        {submitting ? "Redirecting…" : "Sign in with Custos"}
-      </Button>
+    <div className="space-y-6">
+      <UsersNav
+        rightSlot={<RoleFormDialog triggerRender={<Button />} triggerContent="Create role" />}
+      />
+      <RolesGrid />
     </div>
   );
 }

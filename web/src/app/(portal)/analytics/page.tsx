@@ -15,15 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { Suspense } from "react";
-import { NoAccessBody } from "./NoAccessBody";
+import type { Metadata } from "next";
+import { AnalyticsPage } from "@/features/core/analytics/components/AnalyticsPage";
 
-export const metadata = { title: "No access · Custos Portal" };
+export const metadata: Metadata = { title: "Analytics" };
 
-export default function NoAccessPage() {
-  return (
-    <Suspense fallback={null}>
-      <NoAccessBody />
-    </Suspense>
-  );
+export default function AnalyticsRoute() {
+  return <AnalyticsPage />;
 }
