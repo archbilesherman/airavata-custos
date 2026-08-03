@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -83,7 +84,11 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 			r.revoked_at,
 			COALESCE(r.reason, '') AS revocation_reason
 		 FROM certificate_issuance_logs c
-		 LEFT JOIN revocation_events r ON r.serial_number = c.serial_number
+		 LEFT JOIN revocation_events r ON r.id = (
+			SELECT r2.id FROM revocation_events r2
+			WHERE r2.serial_number = c.serial_number
+			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
+		 )
 		 WHERE c.user_email = ?
 		 ORDER BY c.issued_at DESC
 		 LIMIT ? OFFSET ?`,
@@ -133,6 +138,93 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 	}, nil
 }
 
+// ListCertificates returns a deployment-wide page for privileged administrators.
+func (d *DB) ListCertificates(ctx context.Context, limit, offset int) (*CertificateListResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var total int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificate_issuance_logs`).Scan(&total); err != nil {
+		return nil, fmt.Errorf("counting certificates: %w", err)
+	}
+
+	rows, err := d.QueryContext(ctx,
+		`SELECT
+			c.id, c.tenant_id, c.client_id, c.serial_number, c.key_id,
+			c.principal, COALESCE(c.user_email, ''), c.public_key_fingerprint, c.ca_fingerprint,
+			c.valid_after, c.valid_before, c.issued_at, COALESCE(c.source_ip, ''),
+			c.granted_extensions, c.force_command,
+			CASE WHEN r.id IS NOT NULL THEN TRUE ELSE FALSE END AS revoked,
+			r.revoked_at,
+			COALESCE(r.reason, '') AS revocation_reason
+		 FROM certificate_issuance_logs c
+		 LEFT JOIN revocation_events r ON r.id = (
+			SELECT r2.id FROM revocation_events r2
+			WHERE r2.serial_number = c.serial_number
+			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
+		 )
+		 ORDER BY c.issued_at DESC
+		 LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying certificates: %w", err)
+	}
+	defer rows.Close()
+
+	certs, err := scanCertificates(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &CertificateListResult{Certificates: certs, Total: total}, nil
+}
+
+type certificateRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+func scanCertificates(rows certificateRows) ([]CertificateWithStatus, error) {
+	var certs []CertificateWithStatus
+	for rows.Next() {
+		var cert CertificateWithStatus
+		var revokedAt *time.Time
+		var grantedExtensionsJSON []byte
+		var forceCommand sql.NullString
+		if err := rows.Scan(
+			&cert.ID, &cert.TenantID, &cert.ClientID, &cert.SerialNumber, &cert.KeyID,
+			&cert.Principal, &cert.UserEmail, &cert.PublicKeyFingerprint, &cert.CAFingerprint,
+			&cert.ValidAfter, &cert.ValidBefore, &cert.IssuedAt, &cert.SourceIP,
+			&grantedExtensionsJSON, &forceCommand,
+			&cert.Revoked, &revokedAt, &cert.RevocationReason,
+		); err != nil {
+			return nil, fmt.Errorf("scanning certificate row: %w", err)
+		}
+		if grantedExtensionsJSON != nil {
+			if err := json.Unmarshal(grantedExtensionsJSON, &cert.GrantedExtensions); err != nil {
+				return nil, fmt.Errorf("unmarshaling granted_extensions: %w", err)
+			}
+		}
+		if forceCommand.Valid {
+			cert.ForceCommand = &forceCommand.String
+		}
+		cert.RevokedAt = revokedAt
+		certs = append(certs, cert)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating certificate rows: %w", err)
+	}
+	return certs, nil
+}
+
 func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*CertificateWithStatus, error) {
 	var cert CertificateWithStatus
 	var revokedAt *time.Time
@@ -149,7 +241,11 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 			r.revoked_at,
 			COALESCE(r.reason, '') AS revocation_reason
 		 FROM certificate_issuance_logs c
-		 LEFT JOIN revocation_events r ON r.serial_number = c.serial_number
+		 LEFT JOIN revocation_events r ON r.id = (
+			SELECT r2.id FROM revocation_events r2
+			WHERE r2.serial_number = c.serial_number
+			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
+		 )
 		 WHERE c.serial_number = ?`,
 		serial,
 	).Scan(
@@ -160,6 +256,9 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 		&cert.Revoked, &revokedAt, &cert.RevocationReason,
 	)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrCertificateNotFound
+		}
 		return nil, fmt.Errorf("querying certificate: %w", err)
 	}
 

@@ -77,6 +77,7 @@ Environment variables take precedence over YAML values.
 | `DEV_MODE` | `dev_mode.enabled` | Enable dev mode (disables OIDC validation) |
 | `DEV_DEFAULT_EMAIL` | `dev_mode.default_email` | Default email in dev mode |
 | `ALLOWED_ISSUERS` | `signer.auth.allowed_issuers` | Comma-separated list of allowed OIDC issuers |
+| `CORE_API_BASE_URL` | `signer.core_api_base_url` | Custos Core URL used to resolve administrator privileges |
 | `LOG_LEVEL` | `logging.level` | Log level: debug, info, warn, error |
 
 ---
@@ -219,9 +220,22 @@ The service handles SIGTERM and SIGINT for graceful shutdown:
 | `GET` | `/api/v1/certificates` | OIDC Bearer | List certificates for authenticated user |
 | `GET` | `/api/v1/certificates/{serial}` | OIDC Bearer | Get certificate details |
 | `GET` | `/api/v1/userinfo` | OIDC Bearer | Get authenticated user profile |
+| `GET` | `/api/v1/admin/certificates` | OIDC Bearer + signer read privilege | List all certificates |
+| `GET` | `/api/v1/admin/certificates/{serial}` | OIDC Bearer + signer read privilege | Get any certificate |
+| `POST` | `/api/v1/admin/certificates/{serial}/revoke` | OIDC Bearer + signer write privilege | Revoke an active certificate |
 | `GET` | `/metrics` | None | Prometheus metrics |
 
 Client credentials are passed via `X-Client-Id` (format: `{tenant_id}:{client_id}`) and `X-Client-Secret` headers. OIDC Bearer endpoints use `Authorization: Bearer <token>`.
+
+Administrative certificate routes ask Custos Core for the caller's current
+effective privileges on every request. `signer:certificates:read` grants
+deployment-wide list/detail access and `signer:certificates:write` grants
+active-certificate revocation.
+
+> **Revocation enforcement:** these endpoints create authoritative signer
+> revocation state and audit history. OpenSSH KRL generation and distribution
+> are not implemented yet, so a revocation does not by itself make login nodes
+> reject the certificate.
 
 ### API Examples
 

@@ -28,9 +28,12 @@ import (
 )
 
 type CertificateResponse struct {
+	TenantID             string   `json:"tenant_id"`
+	ClientID             string   `json:"client_id"`
 	SerialNumber         int64    `json:"serial_number"`
 	KeyID                string   `json:"key_id"`
 	Principal            string   `json:"principal"`
+	UserEmail            string   `json:"user_email"`
 	PublicKeyFingerprint string   `json:"public_key_fingerprint"`
 	CAFingerprint        string   `json:"ca_fingerprint"`
 	ValidAfter           int64    `json:"valid_after"`
@@ -87,9 +90,12 @@ func (h *CertificatesHandler) HandleList(w http.ResponseWriter, r *http.Request)
 	certs := make([]CertificateResponse, 0, len(result.Certificates))
 	for _, c := range result.Certificates {
 		cert := CertificateResponse{
+			TenantID:             c.TenantID,
+			ClientID:             c.ClientID,
 			SerialNumber:         c.SerialNumber,
 			KeyID:                c.KeyID,
 			Principal:            c.Principal,
+			UserEmail:            c.UserEmail,
 			PublicKeyFingerprint: c.PublicKeyFingerprint,
 			CAFingerprint:        c.CAFingerprint,
 			ValidAfter:           c.ValidAfter.Unix(),
@@ -163,9 +169,12 @@ func (h *CertificatesHandler) HandleGet(w http.ResponseWriter, r *http.Request) 
 
 func toCertificateResponse(c *store.CertificateWithStatus) CertificateResponse {
 	resp := CertificateResponse{
+		TenantID:             c.TenantID,
+		ClientID:             c.ClientID,
 		SerialNumber:         c.SerialNumber,
 		KeyID:                c.KeyID,
 		Principal:            c.Principal,
+		UserEmail:            c.UserEmail,
 		PublicKeyFingerprint: c.PublicKeyFingerprint,
 		CAFingerprint:        c.CAFingerprint,
 		ValidAfter:           c.ValidAfter.Unix(),

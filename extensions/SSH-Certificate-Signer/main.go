@@ -150,6 +150,11 @@ func runServer(cfg *config.Config, logger *slog.Logger, autoMigrate bool) {
 
 	authenticator := auth.NewClientAuthenticator(db)
 	oidcValidator := auth.NewOIDCValidator(cfg.Signer.Auth, cfg.DevMode)
+	coreAuthorizer, err := auth.NewCoreAuthorizationClient(cfg.Signer.CoreAPIBaseURL, 10*time.Second)
+	if err != nil {
+		logger.Error("failed to configure core authorization client", "error", err)
+		os.Exit(1)
+	}
 	policyEnforcer := policy.NewEnforcer(cfg.Signer.Policy.Defaults.MaxTTLSeconds, cfg.Signer.Policy.Defaults.AllowedKeyTypes)
 	auditLogger := audit.NewLogger(db, logger)
 
@@ -174,6 +179,7 @@ func runServer(cfg *config.Config, logger *slog.Logger, autoMigrate bool) {
 	healthHandler := handler.NewHealthHandler(db, vaultClient)
 	adminHandler := handler.NewAdminHandler(vaultClient, logger)
 	certificatesHandler := handler.NewCertificatesHandler(db, logger)
+	adminCertificatesHandler := handler.NewAdminCertificatesHandler(db, logger)
 	userInfoHandler := handler.NewUserInfoHandler()
 
 	handlers := server.Handlers{
@@ -185,10 +191,13 @@ func runServer(cfg *config.Config, logger *slog.Logger, autoMigrate bool) {
 		Admin:             adminHandler.Handle,
 		Certificates:      certificatesHandler.HandleList,
 		CertificateDetail: certificatesHandler.HandleGet,
+		AdminCertificates: adminCertificatesHandler.HandleList,
+		AdminCertificate:  adminCertificatesHandler.HandleGet,
+		AdminRevoke:       adminCertificatesHandler.HandleRevoke,
 		UserInfo:          userInfoHandler.Handle,
 	}
 
-	router := server.NewRouter(cfg, authenticator, oidcValidator, handlers)
+	router := server.NewRouter(cfg, authenticator, oidcValidator, coreAuthorizer, handlers)
 
 	srv := server.New(cfg.Server, router, logger)
 	if err := srv.ListenAndServe(); err != nil {

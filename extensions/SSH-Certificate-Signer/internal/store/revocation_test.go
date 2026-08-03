@@ -46,8 +46,15 @@ const (
 )
 
 func certRow() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"tenant_id", "client_id", "key_id", "ca_fingerprint"}).
-		AddRow("tenant1", "webapp", "alice@webapp-1700000000", "SHA256:cafp")
+	return certRowWithValidity(time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Hour))
+}
+
+func certRowWithValidity(validAfter, validBefore time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"tenant_id", "client_id", "key_id", "ca_fingerprint", "valid_after", "valid_before",
+	}).AddRow(
+		"tenant1", "webapp", "alice@webapp-1700000000", "SHA256:cafp", validAfter, validBefore,
+	)
 }
 
 // Area 1: revoking a known serial inserts exactly one event that copies the
@@ -232,6 +239,48 @@ func TestRevokeCertificateBySerial_BeginError(t *testing.T) {
 	_, err := db.RevokeCertificateBySerial(context.Background(), 42, "r", "tenant1:webapp")
 	if err == nil || !strings.Contains(err.Error(), "beginning transaction") {
 		t.Fatalf("error: got %v, want wrapped begin failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRevokeActiveCertificateBySerial_RejectsExpired(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(qLookupCert).WithArgs(int64(42)).WillReturnRows(
+		certRowWithValidity(time.Now().UTC().Add(-2*time.Hour), time.Now().UTC().Add(-time.Hour)),
+	)
+	mock.ExpectQuery(qExistingRevo).WithArgs(int64(42)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	_, err := db.RevokeActiveCertificateBySerial(context.Background(), 42, "late", "admin-1")
+	if !errors.Is(err, ErrCertificateNotActive) {
+		t.Fatalf("error: got %v, want ErrCertificateNotActive", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRevokeActiveCertificateBySerial_IdempotentAfterExpiry(t *testing.T) {
+	db, mock := newMockDB(t)
+	originalAt := time.Now().UTC().Add(-2 * time.Hour)
+	mock.ExpectBegin()
+	mock.ExpectQuery(qLookupCert).WithArgs(int64(42)).WillReturnRows(
+		certRowWithValidity(time.Now().UTC().Add(-3*time.Hour), time.Now().UTC().Add(-time.Hour)),
+	)
+	mock.ExpectQuery(qExistingRevo).WithArgs(int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"revoked_at", "reason"}).AddRow(originalAt, "original"),
+	)
+	mock.ExpectCommit()
+
+	result, err := db.RevokeActiveCertificateBySerial(context.Background(), 42, "retry", "admin-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.AlreadyRevoked || result.Reason != "original" {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

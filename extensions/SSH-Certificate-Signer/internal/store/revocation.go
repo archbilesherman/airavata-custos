@@ -27,6 +27,10 @@ import (
 // the requesting owner (either it does not exist or belongs to another user).
 var ErrCertificateNotFound = errors.New("certificate not found")
 
+// ErrCertificateNotActive is returned when an administrator attempts to
+// revoke a certificate outside its validity interval.
+var ErrCertificateNotActive = errors.New("certificate is not active")
+
 type RevocationEvent struct {
 	TenantID      string
 	ClientID      string
@@ -84,6 +88,28 @@ func (d *DB) RevokeCertificateBySerial(
 	reason string,
 	revokedBy string,
 ) (*RevokedCertificate, error) {
+	return d.revokeCertificateBySerial(ctx, serialNumber, reason, revokedBy, false)
+}
+
+// RevokeActiveCertificateBySerial is the administrator-facing variant. It
+// refuses a first-time revocation outside the certificate validity interval,
+// while preserving idempotent success for retries of an earlier revocation.
+func (d *DB) RevokeActiveCertificateBySerial(
+	ctx context.Context,
+	serialNumber int64,
+	reason string,
+	revokedBy string,
+) (*RevokedCertificate, error) {
+	return d.revokeCertificateBySerial(ctx, serialNumber, reason, revokedBy, true)
+}
+
+func (d *DB) revokeCertificateBySerial(
+	ctx context.Context,
+	serialNumber int64,
+	reason string,
+	revokedBy string,
+	activeOnly bool,
+) (*RevokedCertificate, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
@@ -92,13 +118,15 @@ func (d *DB) RevokeCertificateBySerial(
 
 	// Existence check; the revocation event inherits the certificate's tenant/client.
 	var tenantID, clientID, keyID, caFingerprint string
+	var validAfter, validBefore time.Time
 	err = tx.QueryRowContext(ctx,
-		`SELECT tenant_id, client_id, key_id, ca_fingerprint
+		`SELECT tenant_id, client_id, key_id, ca_fingerprint, valid_after, valid_before
 		 FROM certificate_issuance_logs
 		 WHERE serial_number = ?
-		 LIMIT 1`,
+		 LIMIT 1
+		 FOR UPDATE`,
 		serialNumber,
-	).Scan(&tenantID, &clientID, &keyID, &caFingerprint)
+	).Scan(&tenantID, &clientID, &keyID, &caFingerprint, &validAfter, &validBefore)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrCertificateNotFound
@@ -132,6 +160,13 @@ func (d *DB) RevokeCertificateBySerial(
 		// fall through to insert
 	default:
 		return nil, fmt.Errorf("checking existing revocation: %w", err)
+	}
+
+	if activeOnly {
+		now := time.Now().UTC()
+		if now.Before(validAfter) || !now.Before(validBefore) {
+			return nil, ErrCertificateNotActive
+		}
 	}
 
 	revokedAt := time.Now().UTC()

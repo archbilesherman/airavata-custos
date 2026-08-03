@@ -1,0 +1,49 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements. See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0.
+
+name: Signer Verify
+
+on:
+  pull_request:
+    paths:
+      - 'extensions/SSH-Certificate-Signer/**'
+      - '.github/workflows/signer-verify.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'extensions/SSH-Certificate-Signer/**'
+      - '.github/workflows/signer-verify.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Format, build, vet, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extensions/SSH-Certificate-Signer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: extensions/SSH-Certificate-Signer/go.mod
+          cache-dependency-path: extensions/SSH-Certificate-Signer/go.sum
+      - name: Check formatting
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt required on:"
+            echo "$files"
+            exit 1
+          fi
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
