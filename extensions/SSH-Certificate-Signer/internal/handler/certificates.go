@@ -45,6 +45,7 @@ type CertificateResponse struct {
 	Revoked              bool     `json:"revoked"`
 	RevokedAt            *int64   `json:"revoked_at,omitempty"`
 	RevocationReason     string   `json:"revocation_reason,omitempty"`
+	RevokedBy            string   `json:"revoked_by,omitempty"`
 }
 
 type CertificateListResponse struct {
@@ -106,6 +107,7 @@ func (h *CertificatesHandler) HandleList(w http.ResponseWriter, r *http.Request)
 			ForceCommand:         c.ForceCommand,
 			Revoked:              c.Revoked,
 			RevocationReason:     c.RevocationReason,
+			RevokedBy:            c.RevokedBy,
 		}
 		if c.RevokedAt != nil {
 			ts := c.RevokedAt.Unix()
@@ -185,6 +187,7 @@ func toCertificateResponse(c *store.CertificateWithStatus) CertificateResponse {
 		ForceCommand:         c.ForceCommand,
 		Revoked:              c.Revoked,
 		RevocationReason:     c.RevocationReason,
+		RevokedBy:            c.RevokedBy,
 	}
 	if c.RevokedAt != nil {
 		ts := c.RevokedAt.Unix()

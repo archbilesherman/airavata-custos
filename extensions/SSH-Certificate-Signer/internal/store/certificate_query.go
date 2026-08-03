@@ -43,6 +43,7 @@ type CertificateWithStatus struct {
 	Revoked              bool
 	RevokedAt            *time.Time
 	RevocationReason     string
+	RevokedBy            string
 }
 
 type CertificateListResult struct {
@@ -82,7 +83,8 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 			c.granted_extensions, c.force_command,
 			CASE WHEN r.id IS NOT NULL THEN TRUE ELSE FALSE END AS revoked,
 			r.revoked_at,
-			COALESCE(r.reason, '') AS revocation_reason
+			COALESCE(r.reason, '') AS revocation_reason,
+			COALESCE(r.revoked_by, '') AS revoked_by
 		 FROM certificate_issuance_logs c
 		 LEFT JOIN revocation_events r ON r.id = (
 			SELECT r2.id FROM revocation_events r2
@@ -111,7 +113,7 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 			&cert.Principal, &cert.UserEmail, &cert.PublicKeyFingerprint, &cert.CAFingerprint,
 			&cert.ValidAfter, &cert.ValidBefore, &cert.IssuedAt, &cert.SourceIP,
 			&grantedExtensionsJSON, &forceCommand,
-			&cert.Revoked, &revokedAt, &cert.RevocationReason,
+			&cert.Revoked, &revokedAt, &cert.RevocationReason, &cert.RevokedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scanning certificate row: %w", err)
 		}
@@ -163,7 +165,8 @@ func (d *DB) ListCertificates(ctx context.Context, limit, offset int) (*Certific
 			c.granted_extensions, c.force_command,
 			CASE WHEN r.id IS NOT NULL THEN TRUE ELSE FALSE END AS revoked,
 			r.revoked_at,
-			COALESCE(r.reason, '') AS revocation_reason
+			COALESCE(r.reason, '') AS revocation_reason,
+			COALESCE(r.revoked_by, '') AS revoked_by
 		 FROM certificate_issuance_logs c
 		 LEFT JOIN revocation_events r ON r.id = (
 			SELECT r2.id FROM revocation_events r2
@@ -204,7 +207,7 @@ func scanCertificates(rows certificateRows) ([]CertificateWithStatus, error) {
 			&cert.Principal, &cert.UserEmail, &cert.PublicKeyFingerprint, &cert.CAFingerprint,
 			&cert.ValidAfter, &cert.ValidBefore, &cert.IssuedAt, &cert.SourceIP,
 			&grantedExtensionsJSON, &forceCommand,
-			&cert.Revoked, &revokedAt, &cert.RevocationReason,
+			&cert.Revoked, &revokedAt, &cert.RevocationReason, &cert.RevokedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scanning certificate row: %w", err)
 		}
@@ -239,7 +242,8 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 			c.granted_extensions, c.force_command,
 			CASE WHEN r.id IS NOT NULL THEN TRUE ELSE FALSE END AS revoked,
 			r.revoked_at,
-			COALESCE(r.reason, '') AS revocation_reason
+			COALESCE(r.reason, '') AS revocation_reason,
+			COALESCE(r.revoked_by, '') AS revoked_by
 		 FROM certificate_issuance_logs c
 		 LEFT JOIN revocation_events r ON r.id = (
 			SELECT r2.id FROM revocation_events r2
@@ -253,7 +257,7 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 		&cert.Principal, &cert.UserEmail, &cert.PublicKeyFingerprint, &cert.CAFingerprint,
 		&cert.ValidAfter, &cert.ValidBefore, &cert.IssuedAt, &cert.SourceIP,
 		&grantedExtensionsJSON, &forceCommand,
-		&cert.Revoked, &revokedAt, &cert.RevocationReason,
+		&cert.Revoked, &revokedAt, &cert.RevocationReason, &cert.RevokedBy,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

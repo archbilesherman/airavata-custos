@@ -21,11 +21,11 @@ func certificateQueryRow() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "tenant_id", "client_id", "serial_number", "key_id", "principal", "user_email",
 		"public_key_fingerprint", "ca_fingerprint", "valid_after", "valid_before", "issued_at",
-		"source_ip", "granted_extensions", "force_command", "revoked", "revoked_at", "revocation_reason",
+		"source_ip", "granted_extensions", "force_command", "revoked", "revoked_at", "revocation_reason", "revoked_by",
 	}).AddRow(
 		1, "tenant-1", "client-1", 42, "key-1", "alice", "alice@example.org",
 		"SHA256:key", "SHA256:ca", issued, issued.Add(time.Hour), issued,
-		"192.0.2.1", []byte(`["permit-pty"]`), nil, true, revoked, "compromised",
+		"192.0.2.1", []byte(`["permit-pty"]`), nil, true, revoked, "compromised", "admin@example.org",
 	)
 }
 
@@ -47,6 +47,9 @@ func TestListCertificatesDeploymentWide(t *testing.T) {
 	certificate := result.Certificates[0]
 	if certificate.TenantID != "tenant-1" || certificate.UserEmail != "alice@example.org" || !certificate.Revoked {
 		t.Fatalf("unexpected certificate: %+v", certificate)
+	}
+	if certificate.RevokedBy != "admin@example.org" {
+		t.Fatalf("unexpected revocation actor: %q", certificate.RevokedBy)
 	}
 	if len(certificate.GrantedExtensions) != 1 || certificate.GrantedExtensions[0] != "permit-pty" {
 		t.Fatalf("unexpected extensions: %v", certificate.GrantedExtensions)
