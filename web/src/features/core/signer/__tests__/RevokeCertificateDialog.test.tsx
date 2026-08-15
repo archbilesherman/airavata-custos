@@ -52,10 +52,16 @@ describe("<RevokeCertificateDialog />", () => {
   });
 
   it("shows a pending label while revoking", () => {
-    renderDialog({ isPending: true });
+    const { props } = renderDialog({ isPending: true });
     expect(screen.getByRole("button", { name: /revoking/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled();
     expect(screen.getByLabelText(/reason/i)).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    const form = screen.getByRole("button", { name: /revoking/i }).closest("form");
+    expect(form).not.toBeNull();
+    if (form) fireEvent.submit(form);
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+    expect(props.onSubmit).not.toHaveBeenCalled();
   });
 
   it("shows remaining-length feedback and rejects whitespace-only reasons", () => {

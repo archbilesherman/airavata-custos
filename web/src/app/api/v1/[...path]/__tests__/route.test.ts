@@ -58,7 +58,7 @@ describe("api v1 proxy route", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ certificates: [] }), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-trace-id": "trace-signer-1" },
       }),
     );
 
@@ -71,6 +71,32 @@ describe("api v1 proxy route", () => {
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toBe("https://signer.example.org/api/v1/admin/certificates?limit=20");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-abc");
+    expect(response.headers.get("x-trace-id")).toBe("trace-signer-1");
+  });
+
+  it("forwards signer request bodies and query parameters", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await POST(
+      new NextRequest("http://localhost:3000/api/v1/signer/admin/certificates/42/revoke?audit=true", {
+        method: "POST",
+        body: JSON.stringify({ reason: "compromised" }),
+        headers: { "content-type": "application/json", accept: "application/json" },
+      }),
+      { params: Promise.resolve({ path: ["signer", "admin", "certificates", "42", "revoke"] }) },
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(
+      "https://signer.example.org/api/v1/admin/certificates/42/revoke?audit=true",
+    );
+    expect(init?.body).toBe(JSON.stringify({ reason: "compromised" }));
+    expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
   });
 
   it("proxies no-content backend responses without constructing a response body", async () => {
@@ -87,5 +113,8 @@ describe("api v1 proxy route", () => {
 
     expect(response.status).toBe(204);
     expect(await response.text()).toBe("");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://core.example.org/roles/role-1/privileges",
+    );
   });
 });

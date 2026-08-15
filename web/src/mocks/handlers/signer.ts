@@ -22,15 +22,47 @@ import { effectivePrivileges } from "./privileges";
 
 const certificates: Certificate[] = (certificatesFixture as Certificate[]).map((c) => ({ ...c }));
 
+type SignerScenario =
+  | "default"
+  | "empty"
+  | "paginated"
+  | "already-revoked"
+  | "inactive"
+  | "forbidden"
+  | "server-error";
+
+function signerScenario(): SignerScenario {
+  if (typeof document === "undefined") return "default";
+  const match = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith("custos.test-signer-scenario="));
+  return (match
+    ? decodeURIComponent(match.slice("custos.test-signer-scenario=".length))
+    : "default") as SignerScenario;
+}
+
+function paginatedCertificates(): Certificate[] {
+  const base = certificates[0];
+  if (!base) return [];
+  return Array.from({ length: 25 }, (_, index) => ({
+    ...base,
+    serial_number: 100 + index,
+    key_id: `key-${100 + index}`,
+    principal: `user-${index + 1}`,
+  }));
+}
+
 export const signerHandlers = [
   http.get("*/api/v1/signer/admin/certificates", ({ request }) => {
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") ?? certificates.length);
+    const scenario = signerScenario();
+    const source = scenario === "empty" ? [] : scenario === "paginated" ? paginatedCertificates() : certificates;
+    const limit = Number(url.searchParams.get("limit") ?? source.length);
     const offset = Number(url.searchParams.get("offset") ?? 0);
-    const items = certificates.slice(offset, offset + limit);
+    const items = source.slice(offset, offset + limit);
     return HttpResponse.json({
       certificates: items,
-      total: certificates.length,
+      total: source.length,
       limit,
       offset,
     });
@@ -44,6 +76,25 @@ export const signerHandlers = [
   }),
 
   http.post("*/api/v1/signer/admin/certificates/:serial/revoke", async ({ params, request }) => {
+    const scenario = signerScenario();
+    if (scenario === "forbidden") {
+      return HttpResponse.json(
+        { error: "insufficient_privilege", message: "Caller lacks required privilege" },
+        { status: 403 },
+      );
+    }
+    if (scenario === "inactive") {
+      return HttpResponse.json(
+        { error: "certificate_not_active", message: "Certificate is not active" },
+        { status: 409 },
+      );
+    }
+    if (scenario === "server-error") {
+      return HttpResponse.json(
+        { error: "authorization_unavailable", message: "Signer temporarily unavailable" },
+        { status: 503 },
+      );
+    }
     if (!effectivePrivileges().includes("signer:certificates:write")) {
       return HttpResponse.json(
         { error: "insufficient_privilege", message: "Caller lacks required privilege" },
@@ -72,6 +123,13 @@ export const signerHandlers = [
     }
 
     // Idempotent: a repeat revoke returns the existing state without re-mutating.
+    const racedRevocation = scenario === "already-revoked";
+    if (racedRevocation) {
+      cert.revoked = true;
+      cert.revoked_at = 1_700_500_000;
+      cert.revocation_reason = "Original backend reason";
+      cert.revoked_by = "another-admin";
+    }
     const alreadyRevoked = cert.revoked;
     if (!alreadyRevoked) {
       cert.revoked = true;

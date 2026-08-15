@@ -40,7 +40,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm dev --port ${port}`,
+    command: `corepack pnpm dev --port ${port}`,
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CertificateList } from "../components/CertificateList";
 import type { Certificate } from "../schemas";
@@ -39,6 +39,7 @@ const revoked: Certificate = {
   ...active,
   serial_number: 44,
   key_id: "k-revoked",
+  principal: "revoked-user",
   revoked: true,
   revoked_at: 1_700_500_000,
   revocation_reason: "Key compromised",
@@ -84,6 +85,47 @@ describe("<CertificateList />", () => {
       screen.queryByRole("link", { name: String(active.serial_number) }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: String(revoked.serial_number) })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["serial", "44"],
+    ["principal", "DEV-ADMIN"],
+  ])("filters the loaded page by %s", (_field, search) => {
+    renderList({ rows: [active, revoked], search });
+    const expected = search === "44" ? revoked.serial_number : active.serial_number;
+    expect(screen.getByRole("link", { name: String(expected) })).toBeInTheDocument();
+    if (search === "44") {
+      expect(screen.queryByRole("link", { name: String(active.serial_number) })).not.toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("link", { name: String(revoked.serial_number) })).not.toBeInTheDocument();
+    }
+  });
+
+  it("reports search and status control changes", () => {
+    const { props } = renderList();
+    fireEvent.change(screen.getByRole("searchbox", { name: /search certificates/i }), {
+      target: { value: "dev" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: /filter by status/i }), {
+      target: { value: "revoked" },
+    });
+    expect(props.onSearchChange).toHaveBeenCalledWith("dev");
+    expect(props.onStatusFilterChange).toHaveBeenCalledWith("revoked");
+  });
+
+  it("renders accurate totals and invokes pagination callbacks", () => {
+    const onPageChange = vi.fn();
+    const onPageSizeChange = vi.fn();
+    renderList({
+      pagination: { page: 1, pageSize: 20, total: 41, onPageChange, onPageSizeChange },
+    });
+    expect(screen.getByText(/Showing 1.+20 of 41/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.change(screen.getByRole("combobox", { name: /rows per page/i }), {
+      target: { value: "50" },
+    });
+    expect(onPageChange).toHaveBeenCalledWith(2);
+    expect(onPageSizeChange).toHaveBeenCalledWith(50);
   });
 
   it("surfaces an error state with a retry callback", () => {

@@ -15,8 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { describe, expect, it } from "vitest";
-import { signerKeys } from "../queries";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+const api = vi.hoisted(() => ({ revokeCertificate: vi.fn() }));
+
+vi.mock("../api", () => ({
+  getCertificate: vi.fn(),
+  listCertificates: vi.fn(),
+  revokeCertificate: api.revokeCertificate,
+}));
+
+import { signerKeys, useRevokeCertificate } from "../queries";
 
 describe("signerKeys", () => {
   it("namespaces under 'signer-certificates'", () => {
@@ -31,5 +43,31 @@ describe("signerKeys", () => {
   it("detail key stringifies the serial", () => {
     expect(signerKeys.detail(42)).toEqual(["signer-certificates", "detail", "42"]);
     expect(signerKeys.detail("42")).toEqual(["signer-certificates", "detail", "42"]);
+  });
+});
+
+describe("useRevokeCertificate", () => {
+  it("invalidates authoritative list and detail state after success", async () => {
+    api.revokeCertificate.mockResolvedValueOnce({
+      success: true,
+      message: "Certificate revoked successfully",
+      serial_number: 42,
+      revoked: true,
+      revoked_at: 1_700_500_000,
+      reason: "compromised",
+      already_revoked: false,
+    });
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+    const { result } = renderHook(() => useRevokeCertificate(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ serial: 42, reason: "compromised" });
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: signerKeys.all });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: signerKeys.detail(42) });
   });
 });
