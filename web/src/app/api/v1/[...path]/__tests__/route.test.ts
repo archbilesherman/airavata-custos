@@ -19,6 +19,7 @@ import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { responseBodyForStatus } from "../proxy-response";
+import { pickBackendBearer } from "@/shared/auth/session";
 
 vi.mock("@/lib/env", () => ({
   serverEnv: {
@@ -41,6 +42,9 @@ const ctx = { params: Promise.resolve({ path: ["roles", "role-1", "privileges"] 
 
 afterEach(() => {
   fetchMock.mockReset();
+  vi.mocked(pickBackendBearer).mockReturnValue("access-token-abc");
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("responseBodyForStatus", () => {
@@ -115,6 +119,67 @@ describe("api v1 proxy route", () => {
     expect(await response.text()).toBe("");
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       "https://core.example.org/roles/role-1/privileges",
+    );
+  });
+
+  it("rejects unauthenticated requests before contacting an upstream", async () => {
+    vi.mocked(pickBackendBearer).mockReturnValueOnce(null);
+
+    const response = await GET(
+      new NextRequest("http://localhost:3000/api/v1/signer/admin/certificates"),
+      { params: Promise.resolve({ path: ["signer", "admin", "certificates"] }) },
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      code: "missing_bearer",
+      message: "Not authenticated",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a sanitized 503 when the selected upstream is unavailable", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed for secret upstream URL"));
+
+    const response = await GET(
+      new NextRequest("http://localhost:3000/api/v1/signer/admin/certificates?limit=20"),
+      { params: Promise.resolve({ path: ["signer", "admin", "certificates"] }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: "upstream_unavailable",
+      message: "Backend service is unavailable",
+    });
+    expect(consoleError).toHaveBeenCalledWith("API proxy upstream unavailable", {
+      service: "signer",
+      method: "GET",
+      path: "/api/v1/admin/certificates",
+    });
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("access-token-abc");
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("signer.example.org");
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("secret upstream URL");
+  });
+
+  it("fails explicitly if a hermetic signer E2E request reaches the proxy", async () => {
+    vi.stubEnv("CUSTOS_E2E_FAIL_ON_SIGNER_PROXY_REQUEST", "true");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await GET(
+      new NextRequest("http://localhost:3000/api/v1/signer/admin/certificates"),
+      { params: Promise.resolve({ path: ["signer", "admin", "certificates"] }) },
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      code: "unexpected_signer_proxy_request",
+      message: "Signer E2E request escaped its Playwright route",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unexpected signer proxy request during hermetic E2E",
+      { method: "GET", path: "/api/v1/signer/admin/certificates" },
     );
   });
 });

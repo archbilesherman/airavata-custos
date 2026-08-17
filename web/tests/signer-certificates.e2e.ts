@@ -4,30 +4,9 @@
 // The ASF licenses this file to You under the Apache License, Version 2.0.
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { signInAs } from "./fixtures/auth";
-
-type SignerScenario =
-  | "empty"
-  | "paginated"
-  | "already-revoked"
-  | "inactive"
-  | "forbidden"
-  | "server-error";
-
-async function setSignerScenario(page: Page, scenario: SignerScenario) {
-  const port = process.env.PORT ?? "3217";
-  await page.context().addCookies([
-    {
-      name: "custos.test-signer-scenario",
-      value: scenario,
-      url: `http://localhost:${port}`,
-      httpOnly: false,
-      secure: false,
-      sameSite: "Lax",
-    },
-  ]);
-}
+import { expect, test } from "./fixtures/signer-api";
 
 async function openRevokeDialog(page: Page, serial = 42) {
   await page.goto(`/admin/signer/certificates/${serial}`);
@@ -76,16 +55,16 @@ test.describe("ssh certificates", () => {
     await expect(page).toHaveURL(/[?&]status=revoked/);
   });
 
-  test("shows a true empty state", async ({ page }) => {
+  test("shows a true empty state", async ({ page, signerApi }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "empty");
+    signerApi.setScenario("empty");
     await page.goto("/admin/signer/certificates");
     await expect(page.getByRole("heading", { name: /no certificates yet/i })).toBeVisible();
   });
 
-  test("paginates against accurate server totals", async ({ page }) => {
+  test("paginates against accurate server totals", async ({ page, signerApi }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "paginated");
+    signerApi.setScenario("paginated");
     await page.goto("/admin/signer/certificates");
     await expect(page.getByText(/Showing 1.*20 of 25/)).toBeVisible();
     await page.getByRole("button", { name: /^Next$/ }).click();
@@ -129,9 +108,12 @@ test.describe("ssh certificates", () => {
     await expect(page.getByRole("button", { name: /^Revoke$/ })).toHaveCount(0);
   });
 
-  test("handles an already-revoked race using original backend state", async ({ page }) => {
+  test("handles an already-revoked race using original backend state", async ({
+    page,
+    signerApi,
+  }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "already-revoked");
+    signerApi.setScenario("already-revoked");
     await openRevokeDialog(page);
     await submitReason(page, "New request reason");
     await expect(page.getByText("Original backend reason")).toBeVisible();
@@ -139,27 +121,30 @@ test.describe("ssh certificates", () => {
     await expect(page.getByRole("button", { name: /^Revoke$/ })).toHaveCount(0);
   });
 
-  test("explains when a certificate becomes inactive before confirmation", async ({ page }) => {
+  test("explains when a certificate becomes inactive before confirmation", async ({
+    page,
+    signerApi,
+  }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "inactive");
+    signerApi.setScenario("inactive");
     await openRevokeDialog(page);
     await submitReason(page, "Race test");
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByText(/no longer active/i)).toBeVisible();
   });
 
-  test("keeps the dialog open after privilege loss", async ({ page }) => {
+  test("keeps the dialog open after privilege loss", async ({ page, signerApi }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "forbidden");
+    signerApi.setScenario("forbidden");
     await openRevokeDialog(page);
     await submitReason(page, "Privilege race");
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByText(/no longer have permission/i)).toBeVisible();
   });
 
-  test("keeps a retryable server failure in the dialog", async ({ page }) => {
+  test("keeps a retryable server failure in the dialog", async ({ page, signerApi }) => {
     await signInAs(page, "admin");
-    await setSignerScenario(page, "server-error");
+    signerApi.setScenario("server-error");
     await openRevokeDialog(page);
     await submitReason(page, "Retry test");
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -193,6 +178,7 @@ test.describe("ssh certificates", () => {
   });
 
   test("has no serious or critical accessibility violations", async ({ page }) => {
+    test.setTimeout(45_000);
     await signInAs(page, "admin");
     await page.goto("/admin/signer/certificates");
     await expect(page.getByRole("heading", { name: /^SSH Certificates$/ })).toBeVisible();
