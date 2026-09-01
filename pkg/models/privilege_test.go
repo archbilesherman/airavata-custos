@@ -28,40 +28,6 @@ func counts(keys []PrivilegeKey) map[PrivilegeKey]int {
 	return m
 }
 
-// Area 6: the signer certificate privileges are registered, returned by the
-// catalog exactly once, and their string values match the shared contract.
-func TestKnownPrivileges_IncludesSignerCertificates(t *testing.T) {
-	if SignerCertificatesRead != "signer:certificates:read" {
-		t.Errorf("SignerCertificatesRead = %q, want %q", SignerCertificatesRead, "signer:certificates:read")
-	}
-	if SignerCertificatesWrite != "signer:certificates:write" {
-		t.Errorf("SignerCertificatesWrite = %q, want %q", SignerCertificatesWrite, "signer:certificates:write")
-	}
-
-	known := KnownPrivileges()
-	c := counts(known)
-
-	for _, want := range []PrivilegeKey{SignerCertificatesRead, SignerCertificatesWrite} {
-		switch c[want] {
-		case 0:
-			t.Errorf("privilege %q is not registered in the catalog", want)
-		case 1:
-			// exactly once — good
-		default:
-			t.Errorf("privilege %q registered %d times, want exactly 1", want, c[want])
-		}
-		if !IsKnownPrivilege(want) {
-			t.Errorf("IsKnownPrivilege(%q) = false, want true", want)
-		}
-	}
-
-	// The catalog as a whole must contain no duplicates.
-	if len(c) != len(known) {
-		t.Errorf("catalog contains duplicates: %d entries but %d unique keys", len(known), len(c))
-	}
-}
-
-// Area 6: adding the signer privileges did not disturb the existing catalog.
 func TestKnownPrivileges_ExistingRegistrationUnchanged(t *testing.T) {
 	existing := []PrivilegeKey{
 		ClustersRead, ClustersWrite,
@@ -78,16 +44,15 @@ func TestKnownPrivileges_ExistingRegistrationUnchanged(t *testing.T) {
 	}
 }
 
-// Area 6: Register is idempotent — re-registering the signer keys must not
-// create duplicate catalog entries.
-func TestRegister_IdempotentForSignerCertificates(t *testing.T) {
-	Register(SignerCertificatesRead, SignerCertificatesWrite)
+func TestRegister_IdempotentForExtensionPrivileges(t *testing.T) {
+	key := PrivilegeKey("test-extension:certificates:read")
+	Register(key, key)
 
 	c := counts(KnownPrivileges())
-	if c[SignerCertificatesRead] != 1 {
-		t.Errorf("after re-register, %q count = %d, want 1", SignerCertificatesRead, c[SignerCertificatesRead])
+	if c[key] != 1 {
+		t.Errorf("after duplicate registration, %q count = %d, want 1", key, c[key])
 	}
-	if c[SignerCertificatesWrite] != 1 {
-		t.Errorf("after re-register, %q count = %d, want 1", SignerCertificatesWrite, c[SignerCertificatesWrite])
+	if !IsKnownPrivilege(key) {
+		t.Errorf("IsKnownPrivilege(%q) = false, want true", key)
 	}
 }

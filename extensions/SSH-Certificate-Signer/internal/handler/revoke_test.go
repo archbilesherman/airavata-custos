@@ -30,6 +30,7 @@ import (
 
 	"github.com/apache/airavata-custos/signer/internal/audit"
 	"github.com/apache/airavata-custos/signer/internal/httputil"
+	signerservice "github.com/apache/airavata-custos/signer/internal/service"
 	"github.com/apache/airavata-custos/signer/internal/store"
 )
 
@@ -85,7 +86,7 @@ func newMockRevokeHandler(t *testing.T) (*RevokeHandler, sqlmock.Sqlmock) {
 
 	sdb := &store.DB{DB: sqldb}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewRevokeHandler(audit.NewLogger(sdb, logger), sdb, logger), mock
+	return NewRevokeHandler(audit.NewLogger(sdb, logger), signerservice.NewRevocationService(sdb), logger), mock
 }
 
 func revokeRequest(body string, withClient bool) *http.Request {

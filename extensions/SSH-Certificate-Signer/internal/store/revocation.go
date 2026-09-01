@@ -23,13 +23,8 @@ import (
 	"time"
 )
 
-// ErrCertificateNotFound is returned when no certificate matches the serial for
-// the requesting owner (either it does not exist or belongs to another user).
+// ErrCertificateNotFound is returned when no issuance record matches the serial.
 var ErrCertificateNotFound = errors.New("certificate not found")
-
-// ErrCertificateNotActive is returned when an administrator attempts to
-// revoke a certificate outside its validity interval.
-var ErrCertificateNotActive = errors.New("certificate is not active")
 
 type RevocationEvent struct {
 	TenantID      string
@@ -41,13 +36,19 @@ type RevocationEvent struct {
 	RevokedBy     string
 }
 
-// RevokedCertificate is the outcome of a revoke request. AlreadyRevoked is true
-// when a prior revocation existed, in which case RevokedAt/Reason echo that row.
-type RevokedCertificate struct {
-	SerialNumber   int64
-	Reason         string
-	RevokedAt      time.Time
-	AlreadyRevoked bool
+type CertificateForRevocation struct {
+	TenantID      string
+	ClientID      string
+	KeyID         string
+	CAFingerprint string
+	UserEmail     string
+	ValidAfter    time.Time
+	ValidBefore   time.Time
+}
+
+type ExistingRevocation struct {
+	RevokedAt time.Time
+	Reason    string
 }
 
 func (d *DB) InsertRevocationEvent(ctx context.Context, ev *RevocationEvent) error {
@@ -76,118 +77,61 @@ func (d *DB) InsertRevocationEvent(ctx context.Context, ev *RevocationEvent) err
 	return nil
 }
 
-// RevokeCertificateBySerial revokes the certificate identified by serial. It does
-// NOT scope by owner — authorization is enforced by the caller (an administrator
-// holding signer:certificates:write, or a trusted machine client). It is
-// idempotent: a repeat revoke returns the existing revocation (AlreadyRevoked=true)
-// without inserting a duplicate event. The revocation event inherits the
-// certificate's tenant/client.
-func (d *DB) RevokeCertificateBySerial(
-	ctx context.Context,
-	serialNumber int64,
-	reason string,
-	revokedBy string,
-) (*RevokedCertificate, error) {
-	return d.revokeCertificateBySerial(ctx, serialNumber, reason, revokedBy, false)
+type RevocationDBTX interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-// RevokeActiveCertificateBySerial is the administrator-facing variant. It
-// refuses a first-time revocation outside the certificate validity interval,
-// while preserving idempotent success for retries of an earlier revocation.
-func (d *DB) RevokeActiveCertificateBySerial(
-	ctx context.Context,
-	serialNumber int64,
-	reason string,
-	revokedBy string,
-) (*RevokedCertificate, error) {
-	return d.revokeCertificateBySerial(ctx, serialNumber, reason, revokedBy, true)
-}
-
-func (d *DB) revokeCertificateBySerial(
-	ctx context.Context,
-	serialNumber int64,
-	reason string,
-	revokedBy string,
-	activeOnly bool,
-) (*RevokedCertificate, error) {
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Existence check; the revocation event inherits the certificate's tenant/client.
-	var tenantID, clientID, keyID, caFingerprint string
-	var validAfter, validBefore time.Time
-	err = tx.QueryRowContext(ctx,
-		`SELECT tenant_id, client_id, key_id, ca_fingerprint, valid_after, valid_before
+func GetCertificateForRevocation(ctx context.Context, db RevocationDBTX, serialNumber int64) (*CertificateForRevocation, error) {
+	var certificate CertificateForRevocation
+	err := db.QueryRowContext(ctx,
+		`SELECT tenant_id, client_id, key_id, ca_fingerprint, COALESCE(user_email, ''), valid_after, valid_before
 		 FROM certificate_issuance_logs
 		 WHERE serial_number = ?
 		 LIMIT 1
 		 FOR UPDATE`,
 		serialNumber,
-	).Scan(&tenantID, &clientID, &keyID, &caFingerprint, &validAfter, &validBefore)
+	).Scan(
+		&certificate.TenantID, &certificate.ClientID, &certificate.KeyID,
+		&certificate.CAFingerprint, &certificate.UserEmail, &certificate.ValidAfter, &certificate.ValidBefore,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrCertificateNotFound
 		}
 		return nil, fmt.Errorf("looking up certificate: %w", err)
 	}
+	return &certificate, nil
+}
 
-	// Idempotency: if a revocation already exists for this serial, return it.
-	var existingRevokedAt time.Time
-	var existingReason string
-	err = tx.QueryRowContext(ctx,
+func GetLatestRevocation(ctx context.Context, db RevocationDBTX, serialNumber int64) (*ExistingRevocation, error) {
+	var existing ExistingRevocation
+	err := db.QueryRowContext(ctx,
 		`SELECT revoked_at, reason
 		 FROM revocation_events
 		 WHERE serial_number = ?
 		 ORDER BY revoked_at DESC, id DESC
 		 LIMIT 1`,
 		serialNumber,
-	).Scan(&existingRevokedAt, &existingReason)
-	switch {
-	case err == nil:
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, fmt.Errorf("committing transaction: %w", commitErr)
+	).Scan(&existing.RevokedAt, &existing.Reason)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
 		}
-		return &RevokedCertificate{
-			SerialNumber:   serialNumber,
-			Reason:         existingReason,
-			RevokedAt:      existingRevokedAt,
-			AlreadyRevoked: true,
-		}, nil
-	case errors.Is(err, sql.ErrNoRows):
-		// fall through to insert
-	default:
 		return nil, fmt.Errorf("checking existing revocation: %w", err)
 	}
+	return &existing, nil
+}
 
-	if activeOnly {
-		now := time.Now().UTC()
-		if now.Before(validAfter) || !now.Before(validBefore) {
-			return nil, ErrCertificateNotActive
-		}
-	}
-
-	revokedAt := time.Now().UTC()
-	_, err = tx.ExecContext(ctx,
+func InsertRevocationEventAt(ctx context.Context, db RevocationDBTX, ev *RevocationEvent, revokedAt time.Time) error {
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO revocation_events
 		 (tenant_id, client_id, serial_number, key_id, ca_fingerprint, revoked_at, reason, revoked_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		tenantID, clientID, serialNumber, keyID, caFingerprint, revokedAt, reason, revokedBy,
+		ev.TenantID, ev.ClientID, ev.SerialNumber, ev.KeyID, ev.CAFingerprint, revokedAt, ev.Reason, ev.RevokedBy,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("inserting revocation event: %w", err)
+		return fmt.Errorf("inserting revocation event: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("committing transaction: %w", err)
-	}
-
-	return &RevokedCertificate{
-		SerialNumber:   serialNumber,
-		Reason:         reason,
-		RevokedAt:      revokedAt,
-		AlreadyRevoked: false,
-	}, nil
+	return nil
 }

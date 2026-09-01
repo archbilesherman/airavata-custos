@@ -29,6 +29,7 @@ import (
 	"github.com/apache/airavata-custos/signer/internal/handler"
 	"github.com/apache/airavata-custos/signer/internal/policy"
 	"github.com/apache/airavata-custos/signer/internal/server"
+	signerservice "github.com/apache/airavata-custos/signer/internal/service"
 	"github.com/apache/airavata-custos/signer/internal/store"
 	"github.com/apache/airavata-custos/signer/internal/validation"
 	"github.com/apache/airavata-custos/signer/internal/vault"
@@ -173,13 +174,13 @@ func runServer(cfg *config.Config, logger *slog.Logger, autoMigrate bool) {
 		"cache_ttl_seconds", cfg.Signer.Validation.CacheTTLSeconds)
 
 	signHandler := handler.NewSignHandler(oidcValidator, policyEnforcer, principalValidator, vaultClient, auditLogger, logger)
-	revokeHandler := handler.NewRevokeHandler(auditLogger, db, logger)
+	revocationService := signerservice.NewRevocationService(db)
+	revokeHandler := handler.NewRevokeHandler(auditLogger, revocationService, logger)
 	jwksHandler := handler.NewJWKSHandler(vaultClient, logger)
 	caPublicKeyHandler := handler.NewCAPublicKeyHandler(vaultClient, logger)
 	healthHandler := handler.NewHealthHandler(db, vaultClient)
 	adminHandler := handler.NewAdminHandler(vaultClient, logger)
-	certificatesHandler := handler.NewCertificatesHandler(db, logger)
-	adminCertificatesHandler := handler.NewAdminCertificatesHandler(db, logger)
+	certificatesHandler := handler.NewCertificatesHandler(db, logger).WithRevocation(coreAuthorizer, revocationService)
 	userInfoHandler := handler.NewUserInfoHandler()
 
 	handlers := server.Handlers{
@@ -191,9 +192,9 @@ func runServer(cfg *config.Config, logger *slog.Logger, autoMigrate bool) {
 		Admin:             adminHandler.Handle,
 		Certificates:      certificatesHandler.HandleList,
 		CertificateDetail: certificatesHandler.HandleGet,
-		AdminCertificates: adminCertificatesHandler.HandleList,
-		AdminCertificate:  adminCertificatesHandler.HandleGet,
-		AdminRevoke:       adminCertificatesHandler.HandleRevoke,
+		CertificateRevoke: certificatesHandler.HandleRevoke,
+		AdminCertificates: certificatesHandler.HandleAdminList,
+		AdminCertificate:  certificatesHandler.HandleAdminGet,
 		UserInfo:          userInfoHandler.Handle,
 	}
 

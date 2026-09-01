@@ -40,10 +40,6 @@ const (
 	TracesRead         PrivilegeKey = "core:traces:read"
 	PrivilegesGrant    PrivilegeKey = "core:privileges:grant"
 	RolesManage        PrivilegeKey = "core:roles:manage"
-	// SSH Certificate Signer capabilities. Read gates viewing the certificates
-	// dashboard; write authorizes administrative certificate revocation.
-	SignerCertificatesRead  PrivilegeKey = "signer:certificates:read"
-	SignerCertificatesWrite PrivilegeKey = "signer:certificates:write"
 )
 
 var (
@@ -66,8 +62,6 @@ func init() {
 		TracesRead,
 		PrivilegesGrant,
 		RolesManage,
-		SignerCertificatesRead,
-		SignerCertificatesWrite,
 	)
 }
 

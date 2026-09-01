@@ -51,6 +51,16 @@ type CertificateListResult struct {
 	Total        int
 }
 
+type CertificateCursor struct {
+	IssuedAt time.Time
+	ID       int64
+}
+
+type CertificatePageResult struct {
+	Certificates []CertificateWithStatus
+	NextCursor   *CertificateCursor
+}
+
 // ListCertificatesByEmail returns certificates issued to a user email, ordered by
 // issued_at descending (newest first). Includes revocation status via LEFT JOIN.
 func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, offset int) (*CertificateListResult, error) {
@@ -140,25 +150,16 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 	}, nil
 }
 
-// ListCertificates returns a deployment-wide page for privileged administrators.
-func (d *DB) ListCertificates(ctx context.Context, limit, offset int) (*CertificateListResult, error) {
+// ListCertificates returns a deployment-wide keyset page for privileged administrators.
+func (d *DB) ListCertificates(ctx context.Context, limit int, cursor *CertificateCursor) (*CertificatePageResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	if limit > 100 {
 		limit = 100
 	}
-	if offset < 0 {
-		offset = 0
-	}
 
-	var total int
-	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificate_issuance_logs`).Scan(&total); err != nil {
-		return nil, fmt.Errorf("counting certificates: %w", err)
-	}
-
-	rows, err := d.QueryContext(ctx,
-		`SELECT
+	query := `SELECT
 			c.id, c.tenant_id, c.client_id, c.serial_number, c.key_id,
 			c.principal, COALESCE(c.user_email, ''), c.public_key_fingerprint, c.ca_fingerprint,
 			c.valid_after, c.valid_before, c.issued_at, COALESCE(c.source_ip, ''),
@@ -172,11 +173,19 @@ func (d *DB) ListCertificates(ctx context.Context, limit, offset int) (*Certific
 			SELECT r2.id FROM revocation_events r2
 			WHERE r2.serial_number = c.serial_number
 			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
-		 )
-		 ORDER BY c.issued_at DESC
-		 LIMIT ? OFFSET ?`,
-		limit, offset,
-	)
+		 )`
+	args := make([]any, 0, 3)
+	if cursor != nil {
+		query += `
+		 WHERE (c.issued_at < ? OR (c.issued_at = ? AND c.id < ?))`
+		args = append(args, cursor.IssuedAt, cursor.IssuedAt, cursor.ID)
+	}
+	query += `
+		 ORDER BY c.issued_at DESC, c.id DESC
+		 LIMIT ?`
+	args = append(args, limit+1)
+
+	rows, err := d.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying certificates: %w", err)
 	}
@@ -186,7 +195,13 @@ func (d *DB) ListCertificates(ctx context.Context, limit, offset int) (*Certific
 	if err != nil {
 		return nil, err
 	}
-	return &CertificateListResult{Certificates: certs, Total: total}, nil
+	result := &CertificatePageResult{Certificates: certs}
+	if len(certs) > limit {
+		last := certs[limit-1]
+		result.Certificates = certs[:limit]
+		result.NextCursor = &CertificateCursor{IssuedAt: last.IssuedAt, ID: last.ID}
+	}
+	return result, nil
 }
 
 type certificateRows interface {

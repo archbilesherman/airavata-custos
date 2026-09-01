@@ -1,7 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one or more
-// contributor license agreements. See the NOTICE file distributed with
-// this work for additional information regarding copyright ownership.
-// The ASF licenses this file to You under the Apache License, Version 2.0.
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
 package store
 
@@ -29,19 +41,27 @@ func certificateQueryRow() *sqlmock.Rows {
 	)
 }
 
-func TestListCertificatesDeploymentWide(t *testing.T) {
-	db, mock := newMockDB(t)
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM certificate_issuance_logs").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery("LEFT JOIN revocation_events r ON r.id").
-		WithArgs(20, 0).
-		WillReturnRows(certificateQueryRow())
-
-	result, err := db.ListCertificates(context.Background(), 0, -1)
+func newMockDB(t *testing.T) (*DB, sqlmock.Sqlmock) {
+	t.Helper()
+	sqldb, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || len(result.Certificates) != 1 {
+	t.Cleanup(func() { _ = sqldb.Close() })
+	return &DB{DB: sqldb}, mock
+}
+
+func TestListCertificatesDeploymentWide(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectQuery("LEFT JOIN revocation_events r ON r.id").
+		WithArgs(21).
+		WillReturnRows(certificateQueryRow())
+
+	result, err := db.ListCertificates(context.Background(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Certificates) != 1 || result.NextCursor != nil {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	certificate := result.Certificates[0]
@@ -56,6 +76,40 @@ func TestListCertificatesDeploymentWide(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListCertificatesDeploymentWideUsesCursorAndTimestampTieBreaker(t *testing.T) {
+	db, mock := newMockDB(t)
+	issued := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	cursor := &CertificateCursor{IssuedAt: issued, ID: 10}
+	rows := certificateQueryRow()
+	rows.AddRow(
+		2, "tenant-1", "client-1", 41, "key-2", "alice", "alice@example.org",
+		"SHA256:key2", "SHA256:ca", issued, issued.Add(time.Hour), issued,
+		"192.0.2.2", []byte(`[]`), nil, false, nil, "", "",
+	)
+	mock.ExpectQuery("WHERE \\(c.issued_at < \\? OR \\(c.issued_at = \\? AND c.id < \\?\\)\\)").
+		WithArgs(issued, issued, int64(10), 2).
+		WillReturnRows(rows)
+
+	result, err := db.ListCertificates(context.Background(), 1, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Certificates) != 1 || result.NextCursor == nil {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.NextCursor.ID != result.Certificates[0].ID || !result.NextCursor.IssuedAt.Equal(issued) {
+		t.Fatalf("unexpected next cursor: %+v", result.NextCursor)
+	}
+}
+
+func TestListCertificatesDeploymentWideQueryError(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectQuery("LEFT JOIN revocation_events r ON r.id").WithArgs(101).WillReturnError(errors.New("query failed"))
+	if _, err := db.ListCertificates(context.Background(), 500, nil); err == nil {
+		t.Fatal("expected query error")
 	}
 }
 
