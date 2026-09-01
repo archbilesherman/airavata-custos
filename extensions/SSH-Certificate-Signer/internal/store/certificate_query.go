@@ -77,7 +77,7 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 	// Count total matching certificates
 	var total int
 	err := d.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM certificate_issuance_logs WHERE user_email = ?`,
+		`SELECT COUNT(*) FROM certificate_issuance_logs WHERE user_email = $1`,
 		email,
 	).Scan(&total)
 	if err != nil {
@@ -101,9 +101,9 @@ func (d *DB) ListCertificatesByEmail(ctx context.Context, email string, limit, o
 			WHERE r2.serial_number = c.serial_number
 			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
 		 )
-		 WHERE c.user_email = ?
+		 WHERE c.user_email = $1
 		 ORDER BY c.issued_at DESC
-		 LIMIT ? OFFSET ?`,
+		 LIMIT $2 OFFSET $3`,
 		email, limit, offset,
 	)
 	if err != nil {
@@ -174,15 +174,17 @@ func (d *DB) ListCertificates(ctx context.Context, limit int, cursor *Certificat
 			WHERE r2.serial_number = c.serial_number
 			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
 		 )`
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 4)
+	limitPlaceholder := "$1"
 	if cursor != nil {
 		query += `
-		 WHERE (c.issued_at < ? OR (c.issued_at = ? AND c.id < ?))`
+		 WHERE (c.issued_at < $1 OR (c.issued_at = $2 AND c.id < $3))`
 		args = append(args, cursor.IssuedAt, cursor.IssuedAt, cursor.ID)
+		limitPlaceholder = "$4"
 	}
 	query += `
 		 ORDER BY c.issued_at DESC, c.id DESC
-		 LIMIT ?`
+		 LIMIT ` + limitPlaceholder
 	args = append(args, limit+1)
 
 	rows, err := d.QueryContext(ctx, query, args...)
@@ -265,7 +267,7 @@ func (d *DB) GetCertificateBySerial(ctx context.Context, serial int64) (*Certifi
 			WHERE r2.serial_number = c.serial_number
 			ORDER BY r2.revoked_at DESC, r2.id DESC LIMIT 1
 		 )
-		 WHERE c.serial_number = ?`,
+		 WHERE c.serial_number = $1`,
 		serial,
 	).Scan(
 		&cert.ID, &cert.TenantID, &cert.ClientID, &cert.SerialNumber, &cert.KeyID,

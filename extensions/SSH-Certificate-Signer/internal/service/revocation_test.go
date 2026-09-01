@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	lookupCertificateQuery  = "SELECT tenant_id, client_id, key_id, ca_fingerprint"
-	existingRevocationQuery = "SELECT revoked_at, reason"
-	insertRevocationQuery   = "INSERT INTO revocation_events"
+	lookupCertificateQuery  = "SELECT tenant_id, client_id, key_id, ca_fingerprint.*WHERE serial_number = \\$1"
+	existingRevocationQuery = "SELECT revoked_at, reason.*WHERE serial_number = \\$1"
+	insertRevocationQuery   = "INSERT INTO revocation_events.*VALUES \\(\\$1, \\$2, \\$3, \\$4, \\$5, \\$6, \\$7, \\$8\\)"
 )
 
 func newRevocationService(t *testing.T, now time.Time) (*RevocationService, sqlmock.Sqlmock) {

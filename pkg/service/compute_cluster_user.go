@@ -122,16 +122,16 @@ func (s *Service) GetComputeClusterUserByPair(ctx context.Context, clusterID, us
 	return c, nil
 }
 
-// GetComputeClusterUserByLocalUsernameAndCluster retrieves the compute-cluster
-// user mapping for the given (local_username, compute_cluster_id) pair.
-func (s *Service) GetComputeClusterUserByLocalUsernameAndCluster(ctx context.Context, clusterID, localUsername string) (*models.ComputeClusterUser, error) {
+// GetComputeClusterUserByClusterAndLocalUsername retrieves the compute-cluster
+// user mapping for the given (compute_cluster_id, local_username) pair.
+func (s *Service) GetComputeClusterUserByClusterAndLocalUsername(ctx context.Context, clusterID, localUsername string) (*models.ComputeClusterUser, error) {
 	if clusterID == "" {
 		return nil, fmt.Errorf("%w: compute_cluster_id is required", ErrInvalidInput)
 	}
 	if localUsername == "" {
 		return nil, fmt.Errorf("%w: local_username is required", ErrInvalidInput)
 	}
-	c, err := s.clusterUsers.FindByLocalUsernameAndCluster(ctx, clusterID, localUsername)
+	c, err := s.clusterUsers.FindByClusterAndLocalUsername(ctx, clusterID, localUsername)
 	if err != nil {
 		return nil, fmt.Errorf("get compute cluster user by local username and cluster: %w", err)
 	}
@@ -197,6 +197,27 @@ func (s *Service) UpdateComputeClusterUser(ctx context.Context, cu *models.Compu
 	}
 
 	s.eventBus.Publish(ctx, events.ComputeClusterUserUpdateEvent, cu)
+	return nil
+}
+
+// MarkComputeClusterUserProvisioned stamps provisioned_at on the mapping,
+// signaling that the account exists in the registry.
+func (s *Service) MarkComputeClusterUserProvisioned(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: compute cluster user id is required", ErrInvalidInput)
+	}
+	cu, err := s.clusterUsers.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("lookup compute cluster user: %w", err)
+	}
+	if cu == nil {
+		return ErrNotFound
+	}
+	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		return s.clusterUsers.MarkProvisioned(ctx, tx, id)
+	}); err != nil {
+		return fmt.Errorf("mark compute cluster user provisioned: %w", err)
+	}
 	return nil
 }
 

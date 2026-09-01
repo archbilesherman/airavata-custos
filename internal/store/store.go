@@ -87,8 +87,8 @@ type ComputeClusterUserStore interface {
 	FindByID(ctx context.Context, id string) (*models.ComputeClusterUser, error)
 	// FindByPair returns the mapping for a (compute_cluster_id, user_id) pair, or nil if absent.
 	FindByPair(ctx context.Context, clusterID, userID string) (*models.ComputeClusterUser, error)
-	// FindByLocalUsernameAndCluster returns the mapping for a (local_username, compute_cluster_id) pair, or nil if absent.
-	FindByLocalUsernameAndCluster(ctx context.Context, clusterID, localUsername string) (*models.ComputeClusterUser, error)
+	// FindByClusterAndLocalUsername returns the mapping for a (local_username, compute_cluster_id) pair, or nil if absent.
+	FindByClusterAndLocalUsername(ctx context.Context, clusterID, localUsername string) (*models.ComputeClusterUser, error)
 	// FindByCluster returns every user mapping for the given compute cluster.
 	FindByCluster(ctx context.Context, clusterID string) ([]models.ComputeClusterUser, error)
 	// FindByUser returns every cluster mapping held by the given Custos user.
@@ -97,6 +97,8 @@ type ComputeClusterUserStore interface {
 	Create(ctx context.Context, tx *sql.Tx, c *models.ComputeClusterUser) error
 	// Update replaces mutable fields of an existing mapping within the provided transaction.
 	Update(ctx context.Context, tx *sql.Tx, c *models.ComputeClusterUser) error
+	// MarkProvisioned stamps provisioned_at on the mapping within the provided transaction.
+	MarkProvisioned(ctx context.Context, tx *sql.Tx, id string) error
 	// ReassignUser moves every mapping owned by fromUserID over to toUserID,
 	// dropping fromUserID's rows on clusters where toUserID already has one.
 	ReassignUser(ctx context.Context, tx *sql.Tx, fromUserID, toUserID string) error
@@ -155,6 +157,10 @@ type ProjectStore interface {
 	// ListWithPI is List joined with the PI user, replacing the per-row
 	// GetUser fan-out the handler would otherwise need.
 	ListWithPI(ctx context.Context, f ProjectListFilter) ([]ProjectWithPI, int, error)
+	// ListWithPIForParticipant returns the projects where the user holds a
+	// project membership or an active allocation membership, PI joined,
+	// newest first.
+	ListWithPIForParticipant(ctx context.Context, userID string) ([]ProjectWithPI, error)
 }
 
 // ProjectListFilter selects which projects ProjectStore.List returns.
@@ -183,6 +189,9 @@ type ComputeAllocationStore interface {
 	// List returns a paginated, filtered slice of allocations plus the total
 	// count matching the filter (ignoring limit/offset).
 	List(ctx context.Context, f AllocationListFilter) ([]models.ComputeAllocation, int, error)
+	// FindByParticipant returns the allocations where the user holds an active
+	// membership, or a governance role on the parent project. Newest first.
+	FindByParticipant(ctx context.Context, userID string) ([]models.ComputeAllocation, error)
 }
 
 // AllocationListFilter selects which allocations ComputeAllocationStore.List returns.
@@ -342,6 +351,9 @@ type ProjectMembershipStore interface {
 	FindByProject(ctx context.Context, projectID string) ([]models.ProjectMembership, error)
 	// FindPIByProject returns the PI row, or nil if the project has no PI yet.
 	FindPIByProject(ctx context.Context, projectID string) (*models.ProjectMembership, error)
+	// IsParticipant reports whether the user has a project_memberships row or
+	// an active membership on any of the project's allocations.
+	IsParticipant(ctx context.Context, projectID, userID string) (bool, error)
 	// Create inserts a new row within the provided transaction.
 	Create(ctx context.Context, tx *sql.Tx, pm *models.ProjectMembership) error
 	// UpdateRole changes the role of an existing (project, user) row.

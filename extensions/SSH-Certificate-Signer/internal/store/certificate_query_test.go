@@ -89,7 +89,7 @@ func TestListCertificatesDeploymentWideUsesCursorAndTimestampTieBreaker(t *testi
 		"SHA256:key2", "SHA256:ca", issued, issued.Add(time.Hour), issued,
 		"192.0.2.2", []byte(`[]`), nil, false, nil, "", "",
 	)
-	mock.ExpectQuery("WHERE \\(c.issued_at < \\? OR \\(c.issued_at = \\? AND c.id < \\?\\)\\)").
+	mock.ExpectQuery("WHERE \\(c.issued_at < \\$1 OR \\(c.issued_at = \\$2 AND c.id < \\$3\\)\\)").
 		WithArgs(issued, issued, int64(10), 2).
 		WillReturnRows(rows)
 

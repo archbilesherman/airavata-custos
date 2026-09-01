@@ -68,7 +68,7 @@ func (d *DB) InsertRevocationEvent(ctx context.Context, ev *RevocationEvent) err
 	_, err := d.ExecContext(ctx,
 		`INSERT INTO revocation_events
 		 (tenant_id, client_id, serial_number, key_id, ca_fingerprint, reason, revoked_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		ev.TenantID, ev.ClientID, serialNumber, keyID, caFingerprint, ev.Reason, ev.RevokedBy,
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func GetCertificateForRevocation(ctx context.Context, db RevocationDBTX, serialN
 	err := db.QueryRowContext(ctx,
 		`SELECT tenant_id, client_id, key_id, ca_fingerprint, COALESCE(user_email, ''), valid_after, valid_before
 		 FROM certificate_issuance_logs
-		 WHERE serial_number = ?
+		 WHERE serial_number = $1
 		 LIMIT 1
 		 FOR UPDATE`,
 		serialNumber,
@@ -109,7 +109,7 @@ func GetLatestRevocation(ctx context.Context, db RevocationDBTX, serialNumber in
 	err := db.QueryRowContext(ctx,
 		`SELECT revoked_at, reason
 		 FROM revocation_events
-		 WHERE serial_number = ?
+		 WHERE serial_number = $1
 		 ORDER BY revoked_at DESC, id DESC
 		 LIMIT 1`,
 		serialNumber,
@@ -127,7 +127,7 @@ func InsertRevocationEventAt(ctx context.Context, db RevocationDBTX, ev *Revocat
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO revocation_events
 		 (tenant_id, client_id, serial_number, key_id, ca_fingerprint, revoked_at, reason, revoked_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		ev.TenantID, ev.ClientID, ev.SerialNumber, ev.KeyID, ev.CAFingerprint, revokedAt, ev.Reason, ev.RevokedBy,
 	)
 	if err != nil {
